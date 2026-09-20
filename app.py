@@ -1,0 +1,269 @@
+import streamlit as st
+import pandas as pd
+from datetime import datetime
+from streamlit_gsheets import GSheetsConnection
+
+# --- Configuration File Routing & Setup ---
+EXPENSE_CATEGORIES = [
+    "Food & Groceries", "Rent & Housing", "Utilities", "Transport & Fuel", 
+    "Entertainment", "Shopping", "Subscriptions", "Medical & Healthcare", "Miscellaneous"
+]
+
+INCOME_CATEGORIES = [
+    "Salary/Wages", "Freelance & Side Hustles", "Investments", "Gifts & Reimbursements", "Other Income"
+]
+
+# --- Core Database Methods Using Streamlit GSheetsConnection ---
+def load_database():
+    """Establishes connections to Google Sheets and reads the ledgers."""
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        
+        # Read data from the configured worksheets
+        df_exp = conn.read(worksheet="Expenses", ttl="0")
+        df_inc = conn.read(worksheet="Income", ttl="0")
+        df_tar = conn.read(worksheet="Targets", ttl="0")
+        
+        # Ensure correct column schemas if sheets are empty or freshly initialized
+        if df_exp.empty or "Amount" not in df_exp.columns:
+            df_exp = pd.DataFrame(columns=["Date", "Month-Year", "Vendor/Business", "Category", "Amount"])
+        if df_inc.empty or "Amount" not in df_inc.columns:
+            df_inc = pd.DataFrame(columns=["Date", "Month-Year", "Source/Payer", "Category", "Amount"])
+            
+        # Parse targets configuration
+        if not df_tar.empty and "Parameter" in df_tar.columns:
+            try:
+                savings_pct = float(df_tar.loc[df_tar["Parameter"] == "Savings_Target_Pct", "Value"].values[0])
+            except Exception:
+                savings_pct = 0.20
+            
+            try:
+                df_caps = df_tar[df_tar["Parameter"] == "Budget_Cap"]
+                limits = df_caps.set_index("Category")["Value"].to_dict()
+            except Exception:
+                limits = {cat: 10000.0 for cat in EXPENSE_CATEGORIES}
+        else:
+            savings_pct = 0.20
+            limits = {cat: 10000.0 for cat in EXPENSE_CATEGORIES}
+            
+        # Clean numeric data values to ensure arithmetic reliability
+        df_exp["Amount"] = pd.to_numeric(df_exp["Amount"], errors="coerce").fillna(0.0)
+        df_inc["Amount"] = pd.to_numeric(df_inc["Amount"], errors="coerce").fillna(0.0)
+            
+        return df_exp, df_inc, savings_pct, limits, conn
+    except Exception as e:
+        st.error(f"Failed to connect to Google Sheets: {e}")
+        st.info("Ensure your Streamlit secrets are properly configured with your Google Sheet URL.")
+        # Return fallback structures so app doesn't immediately crash
+        return (
+            pd.DataFrame(columns=["Date", "Month-Year", "Vendor/Business", "Category", "Amount"]),
+            pd.DataFrame(columns=["Date", "Month-Year", "Source/Payer", "Category", "Amount"]),
+            0.20,
+            {cat: 10000.0 for cat in EXPENSE_CATEGORIES},
+            None
+        )
+
+def save_database(conn, df_exp, df_inc, savings_pct, limits):
+    """Safely overwrites current states back into individual Google Sheet worksheets."""
+    if conn is None:
+        st.error("No active spreadsheet workspace connection detected.")
+        return
+        
+    # Rebuild the target rules data mapping framework
+    target_rows = [{"Parameter": "Savings_Target_Pct", "Category": "Global", "Value": savings_pct}]
+    for cat, val in limits.items():
+        target_rows.append({"Parameter": "Budget_Cap", "Category": cat, "Value": val})
+    df_tar = pd.DataFrame(target_rows)
+    
+    try:
+        # Update each sheet workspace on Google Drive
+        conn.update(worksheet="Expenses", data=df_exp)
+        conn.update(worksheet="Income", data=df_inc)
+        conn.update(worksheet="Targets", data=df_tar)
+    except Exception as e:
+        st.error(f"Failed to save data matrix back to Google Sheets: {e}")
+
+# --- Initialize Application UI Window Environment ---
+st.set_page_config(page_title="Budget Core Console (Sheets Link)", page_icon="💰", layout="wide")
+df_expense, df_income, global_savings_pct, category_limits, gsheets_conn = load_database()
+
+# --- SIDEBAR: Transaction & Configuration Engines ---
+st.sidebar.title("🛠️ Control Console")
+
+menu_choice = st.sidebar.selectbox(
+    "Choose Operation Mode", 
+    ["Log New Transaction", "Setup Budget Caps & Targets", "Manage / Undo Records"]
+)
+
+# 1. OPERATION MODE: LOGGING ENTRIES
+if menu_choice == "Log New Transaction":
+    st.sidebar.subheader("📝 Transaction Input")
+    tx_type = st.sidebar.radio("Transaction Type", ["Expense 💸", "Income 💰"])
+    
+    with st.sidebar.form("transaction_form", clear_on_submit=True):
+        selected_date = st.date_input("Date", datetime.today())
+        month_year_str = selected_date.strftime("%B %Y")
+        
+        entity_label = "Vendor/Business Name" if "Expense" in tx_type else "Source/Payer Name"
+        entity_name = st.text_input(entity_label)
+        
+        cats_list = EXPENSE_CATEGORIES if "Expense" in tx_type else INCOME_CATEGORIES
+        selected_cat = st.selectbox("Category", cats_list)
+        
+        amount = st.number_input("Amount (₹)", min_value=0.0, step=1.0, format="%.2f")
+        submitted = st.form_submit_button("Save Entry")
+        
+        if submitted:
+            if not entity_name.strip():
+                st.sidebar.error("Name field cannot be left blank.")
+            elif amount <= 0:
+                st.sidebar.error("Please provide a valid transaction amount.")
+            else:
+                date_str = selected_date.strftime("%Y-%m-%d")
+                if "Expense" in tx_type:
+                    new_row = {"Date": date_str, "Month-Year": month_year_str, "Vendor/Business": entity_name, "Category": selected_cat, "Amount": amount}
+                    df_expense = pd.concat([df_expense, pd.DataFrame([new_row])], ignore_index=True)
+                else:
+                    new_row = {"Date": date_str, "Month-Year": month_year_str, "Source/Payer": entity_name, "Category": selected_cat, "Amount": amount}
+                    df_income = pd.concat([df_income, pd.DataFrame([new_row])], ignore_index=True)
+                
+                save_database(gsheets_conn, df_expense, df_income, global_savings_pct, category_limits)
+                st.sidebar.success(f"Recorded entry dynamically to Google Sheets cloud workspace!")
+                st.rerun()
+
+# 2. OPERATION MODE: SETUP GOALS
+elif menu_choice == "Setup Budget Caps & Targets":
+    st.sidebar.subheader("⚙️ Goals & Parameters")
+    
+    new_pct = st.sidebar.slider(
+        "Global Target Savings Percentage", 
+        min_value=0, max_value=100, value=int(global_savings_pct * 100), step=5
+    )
+    if new_pct / 100.0 != global_savings_pct:
+        global_savings_pct = new_pct / 100.0
+        save_database(gsheets_conn, df_expense, df_income, global_savings_pct, category_limits)
+        st.sidebar.success("Global Savings Target Adjusted!")
+        st.rerun()
+        
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🗂️ Category Budget Caps")
+    target_cat = st.sidebar.selectbox("Select Sub-Category to modify", EXPENSE_CATEGORIES)
+    current_cap = category_limits.get(target_cat, 0.0)
+    
+    new_cap = st.sidebar.number_input(f"Monthly Budget Cap for {target_cat} (₹)", min_value=0.0, value=float(current_cap), step=100.0)
+    if st.sidebar.button("Update Category Cap"):
+        category_limits[target_cat] = new_cap
+        save_database(gsheets_conn, df_expense, df_income, global_savings_pct, category_limits)
+        st.sidebar.success(f"Updated budget ceiling configuration!")
+        st.rerun()
+
+# 3. OPERATION MODE: UNDO / DELETE LAST LOG
+elif menu_choice == "Manage / Undo Records":
+    st.sidebar.subheader("⚠️ Ledger Maintenance")
+    del_target = st.sidebar.radio("Target Ledger Sheet", ["Expenses Ledger", "Income Ledger"])
+    
+    if st.sidebar.button("🗑️ Delete Most Recent Entry"):
+        if del_target == "Expenses Ledger" and not df_expense.empty:
+            df_expense = df_expense.drop(df_expense.index[-1])
+            save_database(gsheets_conn, df_expense, df_income, global_savings_pct, category_limits)
+            st.sidebar.success("Last recorded expense dropped from Google Sheets.")
+            st.rerun()
+        elif del_target == "Income Ledger" and not df_income.empty:
+            df_income = df_income.drop(df_income.index[-1])
+            save_database(gsheets_conn, df_expense, df_income, global_savings_pct, category_limits)
+            st.sidebar.success("Last recorded income entry dropped from Google Sheets.")
+            st.rerun()
+        else:
+            st.sidebar.warning("Target ledger sheet contains no entries to clean.")
+
+# --- MAIN DASHBOARD INTERFACE UI ---
+st.title("🌟 Google Sheets-Connected Budget Tracker")
+
+# Core Aggregations Calculations
+total_exp = df_expense["Amount"].sum() if not df_expense.empty else 0.0
+total_inc = df_income["Amount"].sum() if not df_income.empty else 0.0
+net_balance = total_inc - total_exp
+
+# Global Lifetime Analytics Cards
+m1, m2, m3 = st.columns(3)
+m1.metric("Lifetime Gross Income", f"₹{total_inc:,.2f}")
+m2.metric("Lifetime Gross Expenses", f"₹{total_exp:,.2f}")
+m3.metric("Net Financial Balance", f"₹{net_balance:,.2f}", delta=f"₹{net_balance:,.2f}")
+
+st.markdown("---")
+
+# Monthly Tracking Filtering Layout
+current_month_str = datetime.now().strftime("%B %Y")
+all_months = list(set(df_expense["Month-Year"].dropna().tolist() + df_income["Month-Year"].dropna().tolist()))
+if current_month_str not in all_months:
+    all_months.append(current_month_str)
+all_months.sort()
+
+selected_month = st.selectbox("📅 Select Targeting Scope Month Analysis", all_months, index=all_months.index(current_month_str) if current_month_str in all_months else 0)
+
+st.subheader(f"🎯 Target Scope Analysis for {selected_month.upper()}")
+
+m_inc = df_income[df_income["Month-Year"] == selected_month]["Amount"].sum() if not df_income.empty else 0.0
+m_exp = df_expense[df_expense["Month-Year"] == selected_month]["Amount"].sum() if not df_expense.empty else 0.0
+m_sav = m_inc - m_exp
+target_savings_threshold = m_inc * global_savings_pct
+
+col_scope_a, col_scope_b = st.columns()
+
+with col_scope_a:
+    st.markdown(f"**Monthly Performance Summary:**")
+    st.write(f"• **Monthly Income:** ₹{m_inc:,.2f}")
+    st.write(f"• **Current Expenses:** ₹{m_exp:,.2f}")
+    st.write(f"• **Target Savings Goal ({global_savings_pct*100:.0f}%):** ₹{target_savings_threshold:,.2f}")
+    
+    if m_inc > 0:
+        if m_sav >= target_savings_threshold:
+            st.success(f"✅ **Savings Health:** Keep it up! Currently saved ₹{m_sav:,.2f}")
+        else:
+            st.error(f"🚨 **GOAL AT RISK:** Saved ₹{m_sav:,.2f} (Short by ₹{max(0.0, target_savings_threshold - m_sav):,.2f})")
+    else:
+        st.info("💡 Log incoming revenue for this targeting scope month to verify metrics configuration.")
+
+with col_scope_b:
+    # Monthly Category Data Visualization Layout
+    monthly_exp_df = df_expense[df_expense["Month-Year"] == selected_month]
+    if not monthly_exp_df.empty:
+        cat_chart_data = monthly_exp_df.groupby("Category")["Amount"].sum().reset_index()
+        st.bar_chart(cat_chart_data, x="Category", y="Amount", color="#FF4B4B", use_container_width=True)
+    else:
+        st.caption("No distribution transactions mapped for bar chart graphing execution.")
+
+# Sub-Category Budget Breakdown Tracker
+st.markdown("### 📊 Sub-Category Budget Tracker")
+tracker_rows = []
+cat_spend = monthly_exp_df.groupby("Category")["Amount"].sum().to_dict() if not monthly_exp_df.empty else {}
+
+for cat in EXPENSE_CATEGORIES:
+    spent = cat_spend.get(cat, 0.0)
+    limit = category_limits.get(cat, 0.0)
+    pct = (spent / limit) * 100 if limit > 0 else 0.0
+    
+    if spent > limit:
+        flag = f"⚠️ OVER BUDGET (Exceeded by ₹{spent - limit:,.2f})"
+    elif pct >= 80:
+        flag = "🔶 Warning (Approaching limit)"
+    else:
+        flag = "🟢 Safe"
+        
+    tracker_rows.append({
+        "Expense Category": cat,
+        "Spent Amount": f"₹{spent:,.2f}",
+        "Budget Ceiling Cap": f"₹{limit:,.2f}",
+        "Utilization %": f"{pct:.1f}%",
+        "Status Flag Alert": flag
+    })
+
+st.table(pd.DataFrame(tracker_rows))
+
+# Raw Records Inspection Engine
+st.markdown("---")
+tab1, tab2 = st.tabs(["🗂️ Global Expenses Logs Ledger", "📥 Global Income Logs Ledger"])
+with tab1:
+    st.dataframe(df_expense, use_container_width=True)
+with tab2:
+    st.dataframe(df_income, use_container_width=True)
