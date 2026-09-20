@@ -192,7 +192,7 @@ elif menu_choice == "Manage / Undo Records":
             st.sidebar.warning("Target ledger sheet contains no entries to clean.")
 
 # --- MAIN DASHBOARD INTERFACE UI ---
-st.title("🌟 Budget Core Master Controller Dashboard")
+st.title("🌟 Garuda Gamana Budget Master Controller Dashboard")
 
 # Core Aggregations Calculations
 total_exp = df_expense["Amount"].sum() if not df_expense.empty else 0.0
