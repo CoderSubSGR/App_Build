@@ -14,71 +14,87 @@ INCOME_CATEGORIES = [
 ]
 
 # --- Core Database & Sheet Pipeline Connection Engine ---
-# Hardening the cloud spreadsheet connector targeting live secrets map architectures
-try:
-    spreadsheet_url = st.secrets["connections"]["gsheets"]["spreadsheet"]
-    conn = st.connection("gsheets", type=GSheetsConnection, spreadsheet=spreadsheet_url)
-except Exception:
-    st.error("🚨 Configuration Error: Google Spreadsheet secret missing or invalid. Check your Streamlit Secrets setting.")
-    st.stop()
+# Defensive connection mapping to completely bypass configuration script freezes
+spreadsheet_url = None
+if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
+    spreadsheet_url = st.secrets["connections"]["gsheets"].get("spreadsheet")
 
 def load_database():
-    """Systematically fetches data matrices across tracking sheets."""
+    """Systematically fetches data matrices across tracking sheets using safe fallbacks."""
+    # Build blank fallbacks first in case connection is not yet configured
+    df_exp = pd.DataFrame(columns=["Date", "Month-Year", "Vendor/Business", "Category", "Amount"])
+    df_inc = pd.DataFrame(columns=["Date", "Month-Year", "Source/Payer", "Category", "Amount"])
+    savings_pct = 0.20
+    limits = {cat: 10000.0 for cat in EXPENSE_CATEGORIES}
+
+    if not spreadsheet_url:
+        return df_exp, df_inc, savings_pct, limits, False
+
     try:
-        df_exp = conn.read(worksheet="Expenses", ttl="0d")
-    except Exception:
-        df_exp = pd.DataFrame(columns=["Date", "Month-Year", "Vendor/Business", "Category", "Amount"])
+        conn = st.connection("gsheets", type=GSheetsConnection)
         
-    try:
-        df_inc = conn.read(worksheet="Income", ttl="0d")
-    except Exception:
-        df_inc = pd.DataFrame(columns=["Date", "Month-Year", "Source/Payer", "Category", "Amount"])
-        
-    try:
-        df_tar = conn.read(worksheet="Targets", ttl="0d")
-        if df_tar.empty or "Parameter" not in df_tar.columns:
-            raise ValueError
-        savings_pct = float(df_tar.loc[df_tar["Parameter"] == "Savings_Target_Pct", "Value"].values[0])
-        limits = df_tar[df_tar["Parameter"] == "Budget_Cap"].set_index("Category")["Value"].to_dict()
-    except Exception:
-        savings_pct = 0.20
-        limits = {cat: 10000.0 for cat in EXPENSE_CATEGORIES}
-        # Safe initialization checkpoint
         try:
-            save_database(df_exp, df_inc, savings_pct, limits)
-        except Exception:
+            df_exp = conn.read(worksheet="Expenses", ttl="0d")
+            if df_exp.empty or "Amount" not in df_exp.columns:
+                df_exp = pd.DataFrame(columns=["Date", "Month-Year", "Vendor/Business", "Category", "Amount"])
+        except:
             pass
-        
-    return df_exp, df_inc, savings_pct, limits
+            
+        try:
+            df_inc = conn.read(worksheet="Income", ttl="0d")
+            if df_inc.empty or "Amount" not in df_inc.columns:
+                df_inc = pd.DataFrame(columns=["Date", "Month-Year", "Source/Payer", "Category", "Amount"])
+        except:
+            pass
+            
+        try:
+            df_tar = conn.read(worksheet="Targets", ttl="0d")
+            if not df_tar.empty and "Parameter" in df_tar.columns:
+                savings_pct = float(df_tar.loc[df_tar["Parameter"] == "Savings_Target_Pct", "Value"].values)
+                limits = df_tar[df_tar["Parameter"] == "Budget_Cap"].set_index("Category")["Value"].to_dict()
+        except:
+            pass
+            
+        return df_exp, df_inc, savings_pct, limits, True
+    except Exception as e:
+        return df_exp, df_inc, savings_pct, limits, False
 
 def save_database(df_exp, df_inc, savings_pct, limits):
     """Safely updates sheets across the connected cloud Google Sheet."""
-    target_rows = [{"Parameter": "Savings_Target_Pct", "Category": "Global", "Value": savings_pct}]
-    for cat, val in limits.items():
-        target_rows.append({"Parameter": "Budget_Cap", "Category": cat, "Value": val})
-    df_tar = pd.DataFrame(target_rows)
-    
-    # Push individual updates up to respective worksheets securely
-    conn.update(worksheet="Expenses", data=df_exp)
-    conn.update(worksheet="Income", data=df_inc)
-    conn.update(worksheet="Targets", data=df_tar)
+    if not spreadsheet_url:
+        return False
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        target_rows = [{"Parameter": "Savings_Target_Pct", "Category": "Global", "Value": savings_pct}]
+        for cat, val in limits.items():
+            target_rows.append({"Parameter": "Budget_Cap", "Category": cat, "Value": val})
+        df_tar = pd.DataFrame(target_rows)
+        
+        conn.update(worksheet="Expenses", data=df_exp)
+        conn.update(worksheet="Income", data=df_inc)
+        conn.update(worksheet="Targets", data=df_tar)
+        return True
+    except:
+        return False
 
 # --- Initialize Application Architecture Data State ---
 st.set_page_config(page_title="Budget Core Console", page_icon="💰", layout="wide")
-df_expense, df_income, global_savings_pct, category_limits = load_database()
+df_expense, df_income, global_savings_pct, category_limits, connection_status = load_database()
 
-# Ensure standard empty fallback frames are structured consistently for column operations
-if df_expense is None or df_expense.empty:
-    df_expense = pd.DataFrame(columns=["Date", "Month-Year", "Vendor/Business", "Category", "Amount"])
-if df_income is None or df_income.empty:
-    df_income = pd.DataFrame(columns=["Date", "Month-Year", "Source/Payer", "Category", "Amount"])
-
-# Force columns type matching to drop processing failures
-df_expense["Amount"] = pd.to_numeric(df_expense["Amount"]).fillna(0.0)
-df_income["Amount"] = pd.to_numeric(df_income["Amount"]).fillna(0.0)
+# Enforce clean data types for mathematical operations
+if not df_expense.empty:
+    df_expense["Amount"] = pd.to_numeric(df_expense["Amount"], errors='coerce').fillna(0.0)
+if not df_income.empty:
+    df_income["Amount"] = pd.to_numeric(df_income["Amount"], errors='coerce').fillna(0.0)
 
 # --- SIDEBAR: Transaction & Configuration Controls ---
 st.sidebar.title("🛠️ Control Console")
+
+if not connection_status:
+    st.sidebar.error("⚠️ Google Spreadsheet secret missing or invalid. Check your Streamlit Secrets setting.")
+    st.sidebar.info("Dashboard is currently running in temporary offline preview mode.")
+else:
+    st.sidebar.success("🔗 Connected to Live Google Sheet database.")
 
 menu_choice = st.sidebar.selectbox(
     "Choose Operation Mode", 
@@ -104,7 +120,9 @@ if menu_choice == "Log New Transaction":
         submitted = st.form_submit_button("Save Entry")
         
         if submitted:
-            if not entity_name.strip():
+            if not connection_status:
+                st.sidebar.error("Cannot save entries while spreadsheet is offline.")
+            elif not entity_name.strip():
                 st.sidebar.error("Name field cannot be left blank.")
             elif amount <= 0:
                 st.sidebar.error("Please provide a valid transaction amount.")
@@ -117,12 +135,11 @@ if menu_choice == "Log New Transaction":
                     new_row = {"Date": date_str, "Month-Year": month_year_str, "Source/Payer": entity_name, "Category": selected_cat, "Amount": amount}
                     df_income = pd.concat([df_income, pd.DataFrame([new_row])], ignore_index=True)
                 
-                try:
-                    save_database(df_expense, df_income, global_savings_pct, category_limits)
-                    st.sidebar.success("Recorded entry dynamically to Google Sheets!")
+                if save_database(df_expense, df_income, global_savings_pct, category_limits):
+                    st.sidebar.success(f"Recorded entry dynamically to Google Sheets!")
                     st.rerun()
-                except Exception as e:
-                    st.sidebar.error(f"Write failure. Verify service account permissions: {e}")
+                else:
+                    st.sidebar.error("Failed to write data. Check sheet write permissions.")
 
 # 2. OPERATION MODE: SETUP GOALS
 elif menu_choice == "Setup Budget Caps & Targets":
@@ -132,14 +149,11 @@ elif menu_choice == "Setup Budget Caps & Targets":
         "Global Target Savings Percentage", 
         min_value=0, max_value=100, value=int(global_savings_pct * 100), step=5
     )
-    if new_pct / 100.0 != global_savings_pct:
+    if (new_pct / 100.0 != global_savings_pct) and connection_status:
         global_savings_pct = new_pct / 100.0
-        try:
-            save_database(df_expense, df_income, global_savings_pct, category_limits)
-            st.sidebar.success("Global Savings Target Adjusted!")
-            st.rerun()
-        except Exception as e:
-            st.sidebar.error(f"Failed to update targets matrix: {e}")
+        save_database(df_expense, df_income, global_savings_pct, category_limits)
+        st.sidebar.success("Global Savings Target Adjusted!")
+        st.rerun()
         
     st.sidebar.markdown("---")
     st.sidebar.subheader("🗂️ Category Budget Caps")
@@ -148,13 +162,13 @@ elif menu_choice == "Setup Budget Caps & Targets":
     
     new_cap = st.sidebar.number_input(f"Monthly Budget Cap for {target_cat} (₹)", min_value=0.0, value=float(current_cap), step=100.0)
     if st.sidebar.button("Update Category Cap"):
-        category_limits[target_cat] = new_cap
-        try:
+        if connection_status:
+            category_limits[target_cat] = new_cap
             save_database(df_expense, df_income, global_savings_pct, category_limits)
-            st.sidebar.success("Updated budget ceiling configuration!")
+            st.sidebar.success(f"Updated budget ceiling configuration!")
             st.rerun()
-        except Exception as e:
-            st.sidebar.error(f"Failed to save modified cap: {e}")
+        else:
+            st.sidebar.error("Cannot modify configuration parameters while offline.")
 
 # 3. OPERATION MODE: UNDO / DELETE LAST LOG
 elif menu_choice == "Manage / Undo Records":
@@ -162,22 +176,18 @@ elif menu_choice == "Manage / Undo Records":
     del_target = st.sidebar.radio("Target Ledger Sheet", ["Expenses Ledger", "Income Ledger"])
     
     if st.sidebar.button("🗑️ Delete Most Recent Entry"):
-        if del_target == "Expenses Ledger" and not df_expense.empty:
+        if not connection_status:
+            st.sidebar.error("Cannot perform ledger cleanup while offline.")
+        elif del_target == "Expenses Ledger" and not df_expense.empty:
             df_expense = df_expense.drop(df_expense.index[-1])
-            try:
-                save_database(df_expense, df_income, global_savings_pct, category_limits)
-                st.sidebar.success("Last recorded expense dropped successfully.")
-                st.rerun()
-            except Exception as e:
-                st.sidebar.error(f"Failed to clear resource entry: {e}")
+            save_database(df_expense, df_income, global_savings_pct, category_limits)
+            st.sidebar.success("Last recorded expense dropped successfully.")
+            st.rerun()
         elif del_target == "Income Ledger" and not df_income.empty:
             df_income = df_income.drop(df_income.index[-1])
-            try:
-                save_database(df_expense, df_income, global_savings_pct, category_limits)
-                st.sidebar.success("Last recorded income entry dropped successfully.")
-                st.rerun()
-            except Exception as e:
-                st.sidebar.error(f"Failed to clear resource entry: {e}")
+            save_database(df_expense, df_income, global_savings_pct, category_limits)
+            st.sidebar.success("Last recorded income entry dropped successfully.")
+            st.rerun()
         else:
             st.sidebar.warning("Target ledger sheet contains no entries to clean.")
 
@@ -185,8 +195,8 @@ elif menu_choice == "Manage / Undo Records":
 st.title("🌟 Budget Core Master Controller Dashboard")
 
 # Core Aggregations Calculations
-total_exp = df_expense["Amount"].sum()
-total_inc = df_income["Amount"].sum()
+total_exp = df_expense["Amount"].sum() if not df_expense.empty else 0.0
+total_inc = df_income["Amount"].sum() if not df_income.empty else 0.0
 net_balance = total_inc - total_exp
 
 # Global Lifetime Analytics Cards
@@ -208,8 +218,8 @@ selected_month = st.selectbox("📅 Select Targeting Scope Month Analysis", all_
 
 st.subheader(f"🎯 Target Scope Analysis for {selected_month.upper()}")
 
-m_inc = df_income[df_income["Month-Year"] == selected_month]["Amount"].sum()
-m_exp = df_expense[df_expense["Month-Year"] == selected_month]["Amount"].sum()
+m_inc = df_income[df_income["Month-Year"] == selected_month]["Amount"].sum() if not df_income.empty else 0.0
+m_exp = df_expense[df_expense["Month-Year"] == selected_month]["Amount"].sum() if not df_expense.empty else 0.0
 m_sav = m_inc - m_exp
 target_savings_threshold = m_inc * global_savings_pct
 
@@ -241,10 +251,7 @@ with col_scope_b:
 # Sub-Category Budget Breakdown Tracker
 st.markdown("### 📊 Sub-Category Budget Tracker")
 tracker_rows = []
-if not monthly_exp_df.empty:
-    cat_spend = monthly_exp_df.groupby("Category")["Amount"].sum().to_dict()
-else:
-    cat_spend = {}
+cat_spend = monthly_exp_df.groupby("Category")["Amount"].sum().to_dict() if not monthly_exp_df.empty else {}
 
 for cat in EXPENSE_CATEGORIES:
     spent = cat_spend.get(cat, 0.0)
