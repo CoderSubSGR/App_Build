@@ -1,3 +1,7 @@
+%pip install pandas openpyxl
+%pip install matplotlib seaborn
+%pip install ipywidgets
+
 import os
 import pandas as pd
 from datetime import datetime
