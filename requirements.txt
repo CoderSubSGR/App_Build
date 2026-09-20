@@ -4,4 +4,4 @@ matplotlib
 seaborn
 ipywidgets
 streamlit
-```text
+st-gsheets-connection
