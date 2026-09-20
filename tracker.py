@@ -1,6 +1,6 @@
-%pip install pandas openpyxl
-%pip install matplotlib seaborn
-%pip install ipywidgets
+pip install pandas openpyxl
+pip install matplotlib seaborn
+pip install ipywidgets
 
 import os
 import pandas as pd
