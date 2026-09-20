@@ -19,7 +19,7 @@ INCOME_CATEGORIES = [
 ]
 
 def initialize_database():
-    \"\"\"Ensures sheets for Expenses, Income, and Targets framework exist systematically.\"\"\"
+    """Ensures sheets for Expenses, Income, and Targets framework exist systematically."""
     if os.path.exists(EXCEL_FILE):
         try:
             df_exp = pd.read_excel(EXCEL_FILE, sheet_name="Expenses")
@@ -48,7 +48,7 @@ def initialize_database():
         return df_exp, df_inc, savings_pct, limits
 
 def save_database(df_exp, df_inc, savings_pct, limits):
-    \"\"\"Safely saves data matrices along with active user target boundaries into Excel.\"\"\"
+    """Safely saves data matrices along with active user target boundaries into Excel."""
     target_rows = [{"Parameter": "Savings_Target_Pct", "Category": "Global", "Value": savings_pct}]
     for cat, val in limits.items():
         target_rows.append({"Parameter": "Budget_Cap", "Category": cat, "Value": val})
@@ -60,7 +60,7 @@ def save_database(df_exp, df_inc, savings_pct, limits):
         df_tar.to_excel(writer, sheet_name="Targets", index=False)
 
 def render_analytics(df_exp, df_inc, savings_pct, limits):
-    \"\"\"Generates precise cash flow breakdowns balancing inputs against current caps.\"\"\"
+    """Generates precise cash flow breakdowns balancing inputs against current caps."""
     total_exp = df_exp["Amount"].sum() if not df_exp.empty else 0.0
     total_inc = df_inc["Amount"].sum() if not df_inc.empty else 0.0
     
