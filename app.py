@@ -5,12 +5,12 @@ from streamlit_gsheets import GSheetsConnection
 
 # --- Configuration Constants ---
 EXPENSE_CATEGORIES = [
-    "Food & Groceries", "Housing Loan EMI", "Music/Dance Fees", "School/Van Fees", "Utilities GAIL/Bescom/CAMS/BWSSB", "Transportation", "Credit Card",  
-    "Maid & Services", "Entertainment", "Shopping Dress and Gifts", "Subscriptions Newspaper/OTT", "Medical & Healthcare", "Mobile/Internet",  "Miscellaneous"
+    "Food & Groceries", "Rent & Housing", "Utilities", "Transport & Fuel", 
+    "Entertainment", "Shopping", "Subscriptions", "Medical & Healthcare", "Miscellaneous"
 ]
 
 INCOME_CATEGORIES = [
-    "Salary", "Rental Income", "Interest", "Gifts & Reimbursements", "Other Income"
+    "Salary/Wages", "Freelance & Side Hustles", "Investments", "Gifts & Reimbursements", "Other Income"
 ]
 
 # --- Core Database & Sheet Pipeline Connection Engine ---
@@ -101,6 +101,14 @@ menu_choice = st.sidebar.selectbox(
     ["Log New Transaction", "Setup Budget Caps & Targets", "Manage / Undo Records"]
 )
 
+# Initialize configuration in session state if not already done
+if "global_savings_pct" not in st.session_state:
+    st.session_state.global_savings_pct = 0.20  # Your default fallback
+
+if "category_limits" not in st.session_state:
+    st.session_state.category_limits = {cat: 10000.0 for cat in EXPENSE_CATEGORIES} # Your default fallback
+
+
 # 1. OPERATION MODE: LOGGING ENTRIES
 if menu_choice == "Log New Transaction":
     st.sidebar.subheader("📝 Transaction Input")
@@ -145,27 +153,43 @@ if menu_choice == "Log New Transaction":
 elif menu_choice == "Setup Budget Caps & Targets":
     st.sidebar.subheader("⚙️ Goals & Parameters")
     
+    # Read baseline directly from session_state
+    current_savings_pct = st.session_state.global_savings_pct
+    
     new_pct = st.sidebar.slider(
         "Global Target Savings Percentage", 
-        min_value=0, max_value=100, value=int(global_savings_pct * 100), step=5
+        min_value=0, max_value=100, value=int(current_savings_pct * 100), step=5
     )
-    if (new_pct / 100.0 != global_savings_pct) and connection_status:
-        global_savings_pct = new_pct / 100.0
-        save_database(df_expense, df_income, global_savings_pct, category_limits)
-        st.sidebar.success("Global Savings Target Adjusted!")
-        st.rerun()
+    
+    # Fix loop: Use an explicit button trigger or a safer assignment check
+    if st.sidebar.button("Save Savings Target"):
+        if connection_status:
+            st.session_state.global_savings_pct = new_pct / 100.0
+            save_database(df_expense, df_income, st.session_state.global_savings_pct, st.session_state.category_limits)
+            st.sidebar.success("Global Savings Target Adjusted!")
+            st.rerun()
+        else:
+            st.sidebar.error("Cannot modify configuration parameters while offline.")
         
     st.sidebar.markdown("---")
     st.sidebar.subheader("🗂️ Category Budget Caps")
     target_cat = st.sidebar.selectbox("Select Sub-Category to modify", EXPENSE_CATEGORIES)
-    current_cap = category_limits.get(target_cat, 10000.0)
     
-    new_cap = st.sidebar.number_input(f"Monthly Budget Cap for {target_cat} (₹)", min_value=0.0, value=float(current_cap), step=100.0)
+    # Read dynamic ceiling directly from session_state
+    current_cap = st.session_state.category_limits.get(target_cat, 10000.0)
+    
+    new_cap = st.sidebar.number_input(
+        f"Monthly Budget Cap for {target_cat} (₹)", 
+        min_value=0.0, value=float(current_cap), step=100.0
+    )
+    
     if st.sidebar.button("Update Category Cap"):
         if connection_status:
-            category_limits[target_cat] = new_cap
-            save_database(df_expense, df_income, global_savings_pct, category_limits)
-            st.sidebar.success(f"Updated budget ceiling configuration!")
+            # Save directly to session state so it survives the rerun
+            st.session_state.category_limits[target_cat] = new_cap
+            
+            save_database(df_expense, df_income, st.session_state.global_savings_pct, st.session_state.category_limits)
+            st.sidebar.success(f"Updated budget ceiling configuration for {target_cat}!")
             st.rerun()
         else:
             st.sidebar.error("Cannot modify configuration parameters while offline.")
@@ -192,7 +216,7 @@ elif menu_choice == "Manage / Undo Records":
             st.sidebar.warning("Target ledger sheet contains no entries to clean.")
 
 # --- MAIN DASHBOARD INTERFACE UI ---
-st.title("🌟 Garuda Gamana Budget Master Controller Dashboard")
+st.title("🌟 Garuda Gamana Budget Dashboard 🌟")
 
 # Core Aggregations Calculations
 total_exp = df_expense["Amount"].sum() if not df_expense.empty else 0.0
