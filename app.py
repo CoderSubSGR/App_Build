@@ -279,7 +279,7 @@ cat_spend = monthly_exp_df.groupby("Category")["Amount"].sum().to_dict() if not 
 
 for cat in EXPENSE_CATEGORIES:
     spent = cat_spend.get(cat, 0.0)
-    limit = category_limits.get(cat, 10000.0)
+    limit = st.session_state.category_limits.get(cat, 10000.0)
     pct = (spent / limit) * 100 if limit > 0 else 0.0
     
     if spent > limit:
