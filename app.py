@@ -167,7 +167,7 @@ elif menu_choice == "Setup Budget Caps & Targets":
             st.session_state.global_savings_pct = new_pct / 100.0
             save_database(df_expense, df_income, st.session_state.global_savings_pct, st.session_state.category_limits)
             st.sidebar.success("Global Savings Target Adjusted!")
-            st.rerun()
+            #st.rerun()
         else:
             st.sidebar.error("Cannot modify configuration parameters while offline.")
         
