@@ -5,12 +5,12 @@ from streamlit_gsheets import GSheetsConnection
 
 # --- Configuration Constants ---
 EXPENSE_CATEGORIES = [
-    "Food & Groceries", "Rent & Housing", "Utilities", "Transport & Fuel", 
-    "Entertainment", "Shopping", "Subscriptions", "Medical & Healthcare", "Miscellaneous"
+    "Food & Groceries", "Housing Loan EMI", "Music/Dance Fees", "School/Van Fees", "Utilities GAIL/Bescom/CAMS/BWSSB", "Transportation", "Credit Card", 
+    "Maid & Services", "Entertainment", "Shopping Dress and Gifts", "Subscriptions Newspaper/OTT", "Medical & Healthcare", "Mobile/Internet", "Miscellaneous"
 ]
 
 INCOME_CATEGORIES = [
-    "Salary/Wages", "Freelance & Side Hustles", "Investments", "Gifts & Reimbursements", "Other Income"
+    "Salary", "Rental Income", "Interests", "Other Income"
 ]
 
 # --- Core Database & Sheet Pipeline Connection Engine ---
@@ -190,7 +190,7 @@ elif menu_choice == "Setup Budget Caps & Targets":
             
             save_database(df_expense, df_income, st.session_state.global_savings_pct, st.session_state.category_limits)
             st.sidebar.success(f"Updated budget ceiling configuration for {target_cat}!")
-            st.rerun()
+            #st.rerun()
         else:
             st.sidebar.error("Cannot modify configuration parameters while offline.")
 
